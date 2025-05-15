@@ -5,15 +5,20 @@ import {
     FlatList,
     StyleSheet,
     TextInput,
+    TouchableOpacity,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Job, jobsMock } from '../../models/job';
-import DropdownPicker from '@/components/DropdownPicker';
+import { jobsMock } from '../../models/job';
+import { useRouter } from 'expo-router';
+import { useWindowDimensions } from 'react-native';
+import InlineDropdown from '@/components/ui/InlineDropdown';
 
 export default function HomeScreen() {
+    const router = useRouter();
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Inactive'>('All');
     const [departmentFilter, setDepartmentFilter] = useState<'All' | string>('All');
+    const { height } = useWindowDimensions();
 
     const departments = ['All', ...new Set(jobsMock.map(j => j.department))];
 
@@ -39,13 +44,13 @@ export default function HomeScreen() {
 
             {/* Filters */}
             <View style={styles.filterRow}>
-                <DropdownPicker
+                <InlineDropdown
                     label="Show Jobs"
                     value={statusFilter}
                     options={['All', 'Active', 'Inactive']}
                     onChange={(val) => setStatusFilter(val as any)}
                 />
-                <DropdownPicker
+                <InlineDropdown
                     label="Department"
                     value={departmentFilter}
                     options={departments}
@@ -53,42 +58,58 @@ export default function HomeScreen() {
                 />
             </View>
 
-            {/* Table header & list */}
-            <View style={styles.tableContainer}>
-                <View style={styles.tableHeader}>
-                    <Text style={[styles.headerText, styles.colName]}>Jobs ({filteredJobs.length})</Text>
-                    <Text style={[styles.headerText, styles.colRecruiter]}>Recruiter</Text>
-                    <Text style={[styles.headerText, styles.colManager]}>Hiring Manager</Text>
-                    <Text style={[styles.headerText, styles.colStatus]}>Status</Text>
-                </View>
-
+            {/* Table */}
+            <View style={[styles.tableContainer, { maxHeight: height - 250 }]}>
                 <FlatList
                     data={filteredJobs}
                     keyExtractor={(item, index) => `${item.name}-${index}`}
                     contentContainerStyle={{ paddingBottom: 12 }}
-                    renderItem={({ item }) => (
-                        <View style={styles.tableRow}>
-                            <Text style={[styles.jobText, styles.colName]}>{item.name}</Text>
-                            <Text style={[styles.jobText, styles.colRecruiter]}>{item.recruiter}</Text>
-                            <Text style={[styles.jobText, styles.colManager]}>{item.hiring_manager}</Text>
-                            <View style={styles.colStatus}>
-                                <View
-                                    style={[
-                                        styles.statusBadge,
-                                        item.status === 'Active' ? styles.active : styles.inactive,
-                                    ]}
-                                >
-                                    <Text
+                    stickyHeaderIndices={[0]}
+                    ListHeaderComponent={() => (
+                        <View style={styles.tableHeader}>
+                            <Text style={[styles.headerText, styles.colName, styles.headerJobs]}>
+                                Jobs ({filteredJobs.length})
+                            </Text>
+                            <Text style={[styles.headerText, styles.colRecruiter]}>Recruiter</Text>
+                            <Text style={[styles.headerText, styles.colManager]}>Hiring Manager</Text>
+                            <Text style={[styles.headerText, styles.colStatus]}>Status</Text>
+                        </View>
+                    )}
+                    renderItem={({ item, index }) => (
+                        <TouchableOpacity
+                            onPress={() =>
+                                router.push({ pathname: '/(job)/applicants', params: { index: index.toString() } })
+                            }
+                        >
+                            <View style={styles.tableRow}>
+                                <Text numberOfLines={0} style={[styles.jobTextBold, styles.colName]}>
+                                    {item.name}
+                                </Text>
+                                <Text numberOfLines={0} style={[styles.jobTextBold, styles.colRecruiter]}>
+                                    {item.recruiter}
+                                </Text>
+                                <Text numberOfLines={0} style={[styles.jobTextBold, styles.colManager]}>
+                                    {item.hiring_manager}
+                                </Text>
+                                <View style={styles.colStatus}>
+                                    <View
                                         style={[
-                                            styles.badgeText,
-                                            item.status === 'Active' ? styles.activeText : styles.inactiveText,
+                                            styles.statusBadge,
+                                            item.status === 'Active' ? styles.active : styles.inactive,
                                         ]}
                                     >
-                                        {item.status}
-                                    </Text>
+                                        <Text
+                                            style={[
+                                                styles.badgeText,
+                                                item.status === 'Active' ? styles.activeText : styles.inactiveText,
+                                            ]}
+                                        >
+                                            {item.status}
+                                        </Text>
+                                    </View>
                                 </View>
                             </View>
-                        </View>
+                        </TouchableOpacity>
                     )}
                 />
             </View>
@@ -100,9 +121,11 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         padding: 16,
+        paddingTop: 24,
         backgroundColor: '#fff',
     },
     searchBar: {
+        marginTop: 24,
         backgroundColor: '#f5f5f5',
         borderRadius: 12,
         flexDirection: 'row',
@@ -125,10 +148,8 @@ const styles = StyleSheet.create({
     tableContainer: {
         backgroundColor: '#fff',
         borderRadius: 16,
-        borderBottomLeftRadius: 16,
-        borderBottomRightRadius: 16,
         overflow: 'hidden',
-        marginBottom: 24,
+        paddingBottom: 16,
         shadowColor: '#000',
         shadowOpacity: 0.06,
         shadowOffset: { width: 0, height: 3 },
@@ -137,41 +158,51 @@ const styles = StyleSheet.create({
     },
     tableHeader: {
         flexDirection: 'row',
-        backgroundColor: '#f9f9f9',
-        paddingVertical: 12,
-        paddingHorizontal: 12,
+        backgroundColor: '#fafafa',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
         borderBottomWidth: 1,
         borderColor: '#eee',
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        zIndex: 1,
     },
     tableRow: {
         flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 14,
-        paddingHorizontal: 12,
+        alignItems: 'flex-start',
+        paddingVertical: 16,
+        paddingHorizontal: 16,
         borderBottomWidth: 1,
         borderColor: '#f2f2f2',
     },
     headerText: {
-        fontWeight: '600',
+        fontWeight: '500',
         fontSize: 13,
-        color: '#999',
+        color: '#bbb',
     },
     jobText: {
         fontSize: 14,
         color: '#333',
+        flexWrap: 'wrap',
+    },
+    jobTextBold: {
+        fontSize: 13,
+        color: '#000',
+        fontWeight: '500',
+        flexWrap: 'wrap',
     },
     colName: { flex: 1.8 },
     colRecruiter: { flex: 1.3 },
-    colManager: { flex: 1.5 },
+    colManager: { flex: 1.5, marginRight: 8, },
     colStatus: {
         flex: 1,
-        alignItems: 'flex-end',
+        alignItems: 'center',
     },
     statusBadge: {
-        paddingVertical: 3,
-        paddingHorizontal: 10,
+        paddingVertical: 5,
+        paddingHorizontal: 7,
         borderRadius: 999,
-        borderWidth: 1.5,
+        borderWidth: 1.2,
     },
     active: {
         backgroundColor: '#e6fff3',
@@ -182,9 +213,13 @@ const styles = StyleSheet.create({
         borderColor: '#e74c3c',
     },
     badgeText: {
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: '600',
     },
     activeText: { color: '#2ecc71' },
     inactiveText: { color: '#e74c3c' },
+    headerJobs: {
+        color: '#000',
+        fontWeight: '500',
+    }
 });
