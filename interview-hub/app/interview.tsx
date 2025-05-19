@@ -1,20 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, FlatList, StyleSheet, Alert, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Animated, Easing, ScrollView, Dimensions } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Audio } from 'expo-av';
 import * as Asset from 'expo-asset';
-
-interface RecordingItem {
-  uri: string;
-  name: string;
-}
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function RecordScreen() {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const isRecordingRef = useRef(false);
-  const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [showSuggestionsButton, setShowSuggestionsButton] = useState(false);
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
+  const [recordingStarted, setRecordingStarted] = useState(false);
 
   const [cvText] = useState(`Core Skill:
     Data Engineer
@@ -149,33 +146,13 @@ export default function RecordScreen() {
 
     · Relevant cloud certifications (e.g., AWS Certified Data Analytics, Azure Data Engineer Associate, Databricks or Snowflake) are a plus`);
 
-  const recordingOptions = {
-    android: {
-      extension: '.m4a',
-      outputFormat: 2,
-      audioEncoder: 3,
-      sampleRate: 44100,
-      numberOfChannels: 2,
-      bitRate: 128000,
-    },
-    ios: {
-      extension: '.m4a',
-      audioQuality: 2,
-      sampleRate: 44100,
-      numberOfChannels: 2,
-      bitRate: 128000,
-      linearPCMBitDepth: 16,
-      linearPCMIsBigEndian: false,
-      linearPCMIsFloat: false,
-    },
-    web: {
-      mimeType: '',
-      bitsPerSecond: 128000,
-    },
-  };
+  // const BACKEND_BASEURL = 'http://192.168.0.107:3000';
+  const BACKEND_BASEURL = 'http://57.153.184.198:8000';
 
-  const BACKEND_BASEURL = 'http://192.168.0.107:3000';
-  // const BACKEND_BASEURL = 'http://57.153.184.198:8000';
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const fadeInQuestions = useRef([] as Animated.Value[]).current;
+  const waveformValues = useRef([...Array(20)].map(() => new Animated.Value(20))).current;
+  const waveformInterval = useRef<number | null>(null);
 
   useEffect(() => {
     const requestPermissions = async () => {
@@ -185,68 +162,72 @@ export default function RecordScreen() {
       }
     };
     requestPermissions();
-    loadRecordings();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.2, duration: 800, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+        Animated.timing(pulseAnim, { toValue: 1.0, duration: 800, useNativeDriver: true, easing: Easing.inOut(Easing.ease) })
+      ])
+    ).start();
   }, []);
-
-  const getTimestamp = (): string => {
-    const now = new Date();
-    return now.toISOString().replace(/:/g, '-').replace('T', '_').replace(/\..+/, '');
-  };
-
-  const loadRecordings = async () => {
-    const files = await FileSystem.readDirectoryAsync(FileSystem.documentDirectory || '');
-    const audioFiles = files
-      .filter(f => f.endsWith('.m4a'))
-      .map(f => ({
-        uri: `${FileSystem.documentDirectory}${f}`,
-        name: f,
-      }));
-    setRecordings(audioFiles);
-  };
 
   const startRecording = async () => {
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      setRecording(recording);
       isRecordingRef.current = true;
-      setShowSuggestionsButton(false);
-      await recordingLoop();
+      setShowSuggestionsButton(true);
+      setRecordingStarted(true);
+      recordingLoop(recording);
+
+      waveformInterval.current = setInterval(() => {
+        if (isRecordingRef.current) {
+          waveformValues.forEach((value, i) => {
+            const maxHeight = 70;
+            const targetHeight = Math.random() * maxHeight;
+            Animated.timing(value, {
+              toValue: targetHeight,
+              duration: 200,
+              useNativeDriver: false,
+            }).start();
+          });
+        }
+      }, 300);
 
     } catch (error) {
       console.error('Failed to start recording:', error);
     }
   };
 
-  const recordingLoop = async () => {
-    while (isRecordingRef.current) {
-      const newRecording = await Audio.Recording.createAsync(recordingOptions);
-      setRecording(newRecording.recording);
+  const getTimestamp = () => {
+    const now = new Date();
+    return now.toISOString().replace(/:/g, '-').replace('T', '_').replace(/\..+/, '');
+  };
 
-      await new Promise(resolve => setTimeout(resolve, 10000));
+  const recordingLoop = (initialRecording: Audio.Recording) => {
+    let activeRecording = initialRecording;
 
-      if (!isRecordingRef.current) {
-        await newRecording.recording.stopAndUnloadAsync();
-        return;
-      }
+    waveformInterval.current = setInterval(async () => {
+      if (!isRecordingRef.current) return;
 
-      await newRecording.recording.stopAndUnloadAsync();
-      const uri = newRecording.recording.getURI();
-
+      await activeRecording.stopAndUnloadAsync();
+      const uri = activeRecording.getURI();
+      const newName = `${getTimestamp()}.m4a`;
+      const newPath = `${FileSystem.documentDirectory}${newName}`;
       if (uri) {
-        const newName = `${getTimestamp()}.m4a`;
-        const newPath = `${FileSystem.documentDirectory}${newName}`;
         await FileSystem.moveAsync({ from: uri, to: newPath });
         await uploadRecording(newPath, "TEST_SESSION_ID");
       }
 
-      await loadRecordings();
-    }
+      const { recording: nextRecording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      activeRecording = nextRecording;
+      setRecording(nextRecording);
+    }, 10000);
   };
 
-  const uploadRecording = async (uri: string, sessionId: string) => {
+  const uploadRecording = async (uri: string, sessionId: string, attempt = 1, maxAttempts = 3): Promise<void> => {
     const fileInfo = await FileSystem.getInfoAsync(uri);
     if (!fileInfo.exists) {
       console.warn('⚠️ Fișierul nu există:', uri);
@@ -270,16 +251,30 @@ export default function RecordScreen() {
         body: formData,
       });
 
+      if (!response.ok) throw new Error(`Status ${response.status}`);
+
       const json = await response.json();
       console.log('✅ Upload success:', json);
     } catch (error) {
-      console.error('❌ Upload failed:', error);
+      console.error(`❌ Upload failed (attempt ${attempt}):`, error);
+
+      if (attempt < maxAttempts) {
+        console.log(`🔁 Retrying upload... (${attempt + 1}/${maxAttempts})`);
+        await new Promise((resolve) => setTimeout(resolve, 2000)); // așteaptă 2 secunde
+        return uploadRecording(uri, sessionId, attempt + 1, maxAttempts);
+      } else {
+        console.error('❌ Final upload attempt failed. No more retries.');
+      }
     }
   };
 
   const stopRecording = async () => {
     isRecordingRef.current = false;
-    setShowSuggestionsButton(true);
+
+    if (waveformInterval.current) {
+      clearInterval(waveformInterval.current);
+      waveformInterval.current = null;
+    }
 
     if (recording) {
       try {
@@ -287,133 +282,182 @@ export default function RecordScreen() {
         const uri = recording.getURI();
 
         if (uri) {
-          const newName = `${getTimestamp()}.m4a`;
+          const newName = `${Date.now()}.m4a`;
           const newPath = `${FileSystem.documentDirectory}${newName}`;
           await FileSystem.moveAsync({ from: uri, to: newPath });
-          await uploadRecording(newPath, "TEST_SESSION_ID");
+          await uploadRecording(newPath, 'TEST_SESSION_ID'); // cu retry inclus
         }
 
         setRecording(null);
-        await loadRecordings();
       } catch (e) {
-        console.warn('❌ Failed to finalize recording on stop:', e);
+        console.warn('❌ Failed to stop recording:', e);
       }
     }
   };
 
   const fetchSuggestions = async () => {
     try {
+      console.log('📡 Sending request to backend for suggestions...');
       const response = await fetch(`${BACKEND_BASEURL}/get_questions_suggestions?session_id=TEST_SESSION_ID&cv=${encodeURIComponent(cvText)}&job_description=${encodeURIComponent(jobDescriptionText)}`);
       const data = await response.json();
       console.log('📌 Suggested Questions:', data.questions);
-      console.log('📌 Reconstructed Dialog:', data.reconstructed_dialog);
+      setSuggestedQuestions(data.questions || []);
+
+      fadeInQuestions.splice(0, fadeInQuestions.length, ...data.questions.map(() => new Animated.Value(0)));
+      data.questions.forEach((_: string, index: number) => {
+        Animated.timing(fadeInQuestions[index], {
+          toValue: 1,
+          duration: 500,
+          delay: index * 200,
+          useNativeDriver: true,
+        }).start();
+      });
     } catch (error) {
       console.error('❌ Failed to fetch suggestions:', error);
     }
   };
 
-  const fetchSuggestionsWithAudio = async () => {
-    try {
-      const asset = Asset.Asset.fromModule(require('../assets/2025-05-08_16-25-37.m4a'));
-      await asset.downloadAsync();
-
-      const formData = new FormData();
-      formData.append('session_id', 'TEST_SESSION_ID');
-      formData.append('file', {
-        uri: asset.localUri || asset.uri,
-        name: '2025-05-08_16-25-37.m4a',
-        type: 'audio/m4a',
-      } as any);
-
-      const uploadResponse = await fetch(`${BACKEND_BASEURL}/upload_audio`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        body: formData,
-      });
-
-      const uploadResult = await uploadResponse.json();
-      console.log('✅ Upload (from asset) success:', uploadResult);
-
-      // now call questions suggestion API
-      await fetchSuggestions();
-
-    } catch (error) {
-      console.error('❌ Failed to upload asset and get suggestions:', error);
-    }
-  };
-
-  const playRecording = async (uri: string) => {
-    const { sound } = await Audio.Sound.createAsync({ uri });
-    await sound.playAsync();
-  };
-
-  const deleteRecording = async (uri: string) => {
-    await FileSystem.deleteAsync(uri);
-    await loadRecordings();
-  };
-
-  const shareRecording = async (uri: string) => {
-    await Sharing.shareAsync(uri);
-  };
-
-  const renderItem = ({ item }: { item: RecordingItem }) => (
-    <View style={styles.item}>
-      <Text>{item.name}</Text>
-      <View style={styles.actions}>
-        <TouchableOpacity onPress={() => playRecording(item.uri)}><Text>▶️</Text></TouchableOpacity>
-        <TouchableOpacity onPress={() => shareRecording(item.uri)}><Text>📤</Text></TouchableOpacity>
-        <TouchableOpacity onPress={() => deleteRecording(item.uri)}><Text>🗑️</Text></TouchableOpacity>
-      </View>
-    </View>
-  );
-
   return (
     <View style={styles.container}>
-      {!isRecordingRef.current ? (
-        <TouchableOpacity onPress={startRecording} style={styles.recordButton}>
-          <View style={styles.outerCircle}><View style={styles.innerCircle} /></View>
-          <Text style={styles.label}>Start Recording</Text>
-        </TouchableOpacity>
-      ) : (
-        <View>
-          <View style={styles.waveform} />
-          <TouchableOpacity onPress={stopRecording} style={styles.stopButton}>
-            <Text style={{ color: 'red' }}>🟥 stop recording</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      <View style={styles.fixedBottom}>
+        {suggestedQuestions.length > 0 && (
+          <View style={{ marginTop: 30, alignItems: 'center' }}>
+            <Text style={styles.suggestionsHeader}>📌 Suggested Questions</Text>
+            {suggestedQuestions.map((question, index) => (
+              <Animated.View key={index} style={[styles.questionCard, { opacity: fadeInQuestions[index] }]}>
+                <Text style={styles.questionText}>• {question}</Text>
+              </Animated.View>
+            ))}
+          </View>
+        )}
+        {recordingStarted && (
+          <View style={styles.waveformRow}>
+            {waveformValues.map((bar, index) => (
+              <Animated.View
+                key={index}
+                style={[
+                  styles.waveformBar,
+                  {
+                    height: Animated.multiply(bar, 1).interpolate({
+                      inputRange: [0, 30],
+                      outputRange: [0, 30],
+                      extrapolate: 'clamp'
+                    })
+                  },
+                  !isRecordingRef.current && styles.waveformBarInactive
+                ]}
+              />
+            ))}
+          </View>
+        )}
+        <Animated.View style={[styles.outerCircle, { transform: [{ scale: pulseAnim }] }]}>
+          {!isRecordingRef.current ? (
+            <TouchableOpacity onPress={startRecording} style={styles.innerCircle} />
+          ) : (
+            <TouchableOpacity onPress={stopRecording} style={styles.stopSquare} />
+          )}
+        </Animated.View>
+        <Text style={styles.label}>
+          {isRecordingRef.current ? 'Stop Recording' : 'Start Recording'}
+        </Text>
 
-      {showSuggestionsButton && (
-        <>
-          <TouchableOpacity onPress={fetchSuggestions} style={styles.stopButton}>
-            <Text style={{ color: 'blue' }}>💡 Get Question Suggestions</Text>
+        {showSuggestionsButton && (
+          <TouchableOpacity onPress={fetchSuggestions} style={styles.suggestionButton}>
+            <Text style={{ color: 'white', fontSize: 16 }}>💡 Get Questions</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={fetchSuggestionsWithAudio} style={styles.stopButton}>
-            <Text style={{ color: 'purple' }}>🎙️ Get Questions with Audio</Text>
-          </TouchableOpacity>
-        </>
-      )}
-
-      <FlatList
-        data={recordings}
-        keyExtractor={(item) => item.uri}
-        renderItem={renderItem}
-        ListEmptyComponent={<Text>No recordings yet</Text>}
-      />
-    </View>
+        )}
+      </View>
+    </View >
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 20, marginTop: 50 },
-  recordButton: { alignItems: 'center' },
-  outerCircle: { width: 150, height: 150, borderRadius: 75, backgroundColor: '#f2f2f2', justifyContent: 'center', alignItems: 'center' },
-  innerCircle: { width: 100, height: 100, borderRadius: 50, backgroundColor: 'salmon' },
-  label: { marginTop: 10, fontSize: 18 },
-  stopButton: { marginTop: 20, alignItems: 'center', backgroundColor: '#ffe6e6', padding: 15, borderRadius: 15 },
-  waveform: { height: 80, backgroundColor: '#000', marginBottom: 20 },
-  item: { padding: 10, borderBottomWidth: 1, borderColor: '#ddd' },
-  actions: { flexDirection: 'row', gap: 10, marginTop: 5 }
+  fixedBottom: {
+    position: 'absolute',
+    bottom: 40,
+    alignItems: 'center',
+  },
+  container: {
+    flex: 1,
+    paddingTop: 20,
+    paddingBottom: 20,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  outerCircle: {
+    width: SCREEN_WIDTH * 0.3,
+    height: SCREEN_WIDTH * 0.3,
+    borderRadius: SCREEN_WIDTH * 0.2,
+    backgroundColor: '#eee',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginVertical: 20,
+  },
+  innerCircle: {
+    width: SCREEN_WIDTH * 0.18,
+    height: SCREEN_WIDTH * 0.18,
+    borderRadius: SCREEN_WIDTH * 0.125,
+    backgroundColor: 'salmon',
+  },
+  stopSquare: {
+    width: SCREEN_WIDTH * 0.18,
+    height: SCREEN_WIDTH * 0.18,
+    backgroundColor: 'salmon',
+    borderRadius: 6,
+  },
+  label: {
+    fontSize: 18,
+    marginBottom: 10,
+  },
+  suggestionButton: {
+    marginTop: 20,
+    backgroundColor: '#007BFF',
+    paddingVertical: 15,
+    paddingHorizontal: 30,
+    borderRadius: 20,
+  },
+  suggestionsHeader: {
+    fontWeight: 'bold',
+    fontSize: 18,
+    marginBottom: 10,
+    color: '#333',
+    alignSelf: 'center',
+  },
+  questionCard: {
+    backgroundColor: '#fff',
+    padding: 15,
+    marginVertical: 6,
+    borderRadius: 10,
+    width: SCREEN_WIDTH * 0.9,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  questionText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  waveformRow: {
+    flexDirection: 'row',
+    gap: 4,
+    marginTop: 10,
+    height: 50,
+    alignItems: 'flex-end',
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: '#f9f9f9',
+  },
+  waveformBar: {
+    width: 6,
+    backgroundColor: '#333',
+    borderRadius: 10,
+    marginHorizontal: 2,
+  },
+  waveformBarInactive: {
+    backgroundColor: 'salmon',
+  },
 });
+
