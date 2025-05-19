@@ -12,7 +12,7 @@ export default function RecordScreen() {
   const [showSuggestionsButton, setShowSuggestionsButton] = useState(false);
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [recordingStarted, setRecordingStarted] = useState(false);
-
+  const [sessionId] = useState(() => `session_${Date.now()}`);
   const [cvText] = useState(`Core Skill:
     Data Engineer
    
@@ -153,6 +153,7 @@ export default function RecordScreen() {
   const fadeInQuestions = useRef([] as Animated.Value[]).current;
   const waveformValues = useRef([...Array(20)].map(() => new Animated.Value(20))).current;
   const waveformInterval = useRef<number | null>(null);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
   useEffect(() => {
     const requestPermissions = async () => {
@@ -216,7 +217,7 @@ export default function RecordScreen() {
       const newPath = `${FileSystem.documentDirectory}${newName}`;
       if (uri) {
         await FileSystem.moveAsync({ from: uri, to: newPath });
-        await uploadRecording(newPath, "TEST_SESSION_ID");
+        await uploadRecording(newPath, sessionId);
       }
 
       const { recording: nextRecording } = await Audio.Recording.createAsync(
@@ -224,7 +225,7 @@ export default function RecordScreen() {
       );
       activeRecording = nextRecording;
       setRecording(nextRecording);
-    }, 10000);
+    }, 60000);
   };
 
   const uploadRecording = async (uri: string, sessionId: string, attempt = 1, maxAttempts = 3): Promise<void> => {
@@ -285,7 +286,7 @@ export default function RecordScreen() {
           const newName = `${Date.now()}.m4a`;
           const newPath = `${FileSystem.documentDirectory}${newName}`;
           await FileSystem.moveAsync({ from: uri, to: newPath });
-          await uploadRecording(newPath, 'TEST_SESSION_ID'); // cu retry inclus
+          await uploadRecording(newPath, sessionId); // cu retry inclus
         }
 
         setRecording(null);
@@ -295,16 +296,29 @@ export default function RecordScreen() {
     }
   };
 
-  const fetchSuggestions = async () => {
+  const fetchSuggestions = async (session_id: string) => {
     try {
+      setLoadingSuggestions(true);
       console.log('📡 Sending request to backend for suggestions...');
-      const response = await fetch(`${BACKEND_BASEURL}/get_questions_suggestions?session_id=TEST_SESSION_ID&cv=${encodeURIComponent(cvText)}&job_description=${encodeURIComponent(jobDescriptionText)}`);
+      const response = await fetch(`${BACKEND_BASEURL}/get_questions_suggestions?session_id=${session_id}&cv=${encodeURIComponent(cvText)}&job_description=${encodeURIComponent(jobDescriptionText)}`);
       const data = await response.json();
       console.log('📌 Suggested Questions:', data.questions);
-      setSuggestedQuestions(data.questions || []);
+      let questionsArray: string[] = [];
 
-      fadeInQuestions.splice(0, fadeInQuestions.length, ...data.questions.map(() => new Animated.Value(0)));
-      data.questions.forEach((_: string, index: number) => {
+      if (typeof data.questions === 'string') {
+        questionsArray = data.questions
+          .split(/\n(?=\d+\.\s)/)
+          .map((q: string) => q.trim())
+          .filter((q: string) => q !== '');
+      } else if (Array.isArray(data.questions)) {
+        questionsArray = data.questions;
+      }
+
+      setSuggestedQuestions(questionsArray);
+
+
+      fadeInQuestions.splice(0, fadeInQuestions.length, ...questionsArray.map(() => new Animated.Value(0)));
+      questionsArray.forEach((_, index) => {
         Animated.timing(fadeInQuestions[index], {
           toValue: 1,
           duration: 500,
@@ -314,60 +328,62 @@ export default function RecordScreen() {
       });
     } catch (error) {
       console.error('❌ Failed to fetch suggestions:', error);
+    } finally {
+      setLoadingSuggestions(false);
     }
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.fixedBottom}>
-        {suggestedQuestions.length > 0 && (
-          <View style={{ marginTop: 30, alignItems: 'center' }}>
-            <Text style={styles.suggestionsHeader}>📌 Suggested Questions</Text>
-            {suggestedQuestions.map((question, index) => (
-              <Animated.View key={index} style={[styles.questionCard, { opacity: fadeInQuestions[index] }]}>
-                <Text style={styles.questionText}>• {question}</Text>
-              </Animated.View>
-            ))}
-          </View>
-        )}
-        {recordingStarted && (
-          <View style={styles.waveformRow}>
-            {waveformValues.map((bar, index) => (
-              <Animated.View
-                key={index}
-                style={[
-                  styles.waveformBar,
-                  {
-                    height: Animated.multiply(bar, 1).interpolate({
-                      inputRange: [0, 30],
-                      outputRange: [0, 30],
-                      extrapolate: 'clamp'
-                    })
-                  },
-                  !isRecordingRef.current && styles.waveformBarInactive
-                ]}
-              />
-            ))}
-          </View>
-        )}
-        <Animated.View style={[styles.outerCircle, { transform: [{ scale: pulseAnim }] }]}>
-          {!isRecordingRef.current ? (
-            <TouchableOpacity onPress={startRecording} style={styles.innerCircle} />
-          ) : (
-            <TouchableOpacity onPress={stopRecording} style={styles.stopSquare} />
+    <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end', paddingBottom: 20 }} style={{ flex: 1 }}>
+      <View style={styles.container}>
+          {suggestedQuestions.length > 0 && (
+            <View style={{ marginTop: 30, alignItems: 'center' }}>
+              <Text style={styles.suggestionsHeader}>📌 Suggested Questions</Text>
+              {suggestedQuestions.map((question, index) => (
+                <Animated.View key={index} style={[styles.questionCard, { opacity: fadeInQuestions[index] }]}>
+                  <Text style={styles.questionText}>{question}</Text>
+                </Animated.View>
+              ))}
+            </View>
           )}
-        </Animated.View>
-        <Text style={styles.label}>
-          {isRecordingRef.current ? 'Stop Recording' : 'Start Recording'}
-        </Text>
-
-        {showSuggestionsButton && (
-          <TouchableOpacity onPress={fetchSuggestions} style={styles.suggestionButton}>
+          {loadingSuggestions && (
+            <Text style={{ marginTop: 10, fontSize: 14, color: '#555' }}>⏳ Loading questions...</Text>
+          )}
+          {recordingStarted && (
+            <View style={styles.waveformRow}>
+              {waveformValues.map((bar, index) => (
+                <Animated.View
+                  key={index}
+                  style={[
+                    styles.waveformBar,
+                    {
+                      height: Animated.multiply(bar, 1).interpolate({
+                        inputRange: [0, 30],
+                        outputRange: [0, 30],
+                        extrapolate: 'clamp'
+                      })
+                    },
+                    !isRecordingRef.current && styles.waveformBarInactive
+                  ]}
+                />
+              ))}
+            </View>
+          )}
+          <Animated.View style={[styles.outerCircle, { transform: [{ scale: pulseAnim }] }]}>
+            {!isRecordingRef.current ? (
+              <TouchableOpacity onPress={startRecording} style={styles.innerCircle} />
+            ) : (
+              <TouchableOpacity onPress={stopRecording} style={styles.stopSquare} />
+            )}
+          </Animated.View>
+          <Text style={styles.label}>
+            {isRecordingRef.current ? 'Stop Recording' : 'Start Recording'}
+          </Text>
+          <TouchableOpacity onPress={() => fetchSuggestions(sessionId)} style={styles.suggestionButton}>
             <Text style={{ color: 'white', fontSize: 16 }}>💡 Get Questions</Text>
           </TouchableOpacity>
-        )}
       </View>
-    </View >
+    </ScrollView >
   );
 }
 
@@ -381,7 +397,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingTop: 20,
     paddingBottom: 20,
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
   },
   outerCircle: {
@@ -429,6 +445,7 @@ const styles = StyleSheet.create({
     marginVertical: 6,
     borderRadius: 10,
     width: SCREEN_WIDTH * 0.9,
+    maxWidth: 500,
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 5,
@@ -437,6 +454,9 @@ const styles = StyleSheet.create({
   questionText: {
     fontSize: 14,
     color: '#333',
+    flexShrink: 1,
+    flexWrap: 'wrap',
+    width: '100%',
   },
   waveformRow: {
     flexDirection: 'row',
@@ -460,4 +480,3 @@ const styles = StyleSheet.create({
     backgroundColor: 'salmon',
   },
 });
-
