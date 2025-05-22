@@ -4,6 +4,8 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Audio } from 'expo-av';
 import * as Asset from 'expo-asset';
+import { useNavigation, useRouter } from 'expo-router';
+import { useInterview } from '@/models/InterviewContext';
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function RecordScreen() {
@@ -146,9 +148,9 @@ export default function RecordScreen() {
 
     · Relevant cloud certifications (e.g., AWS Certified Data Analytics, Azure Data Engineer Associate, Databricks or Snowflake) are a plus`);
 
-  // const BACKEND_BASEURL = 'http://192.168.0.107:3000';
-  const BACKEND_BASEURL = 'http://57.153.184.198:8000';
-
+  const BACKEND_BASEURL = 'https://interview-hub-proxy.onrender.com';
+  const router = useRouter();
+  const { setData } = useInterview();
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeInQuestions = useRef([] as Animated.Value[]).current;
   const waveformValues = useRef([...Array(20)].map(() => new Animated.Value(20))).current;
@@ -261,7 +263,7 @@ export default function RecordScreen() {
 
       if (attempt < maxAttempts) {
         console.log(`🔁 Retrying upload... (${attempt + 1}/${maxAttempts})`);
-        await new Promise((resolve) => setTimeout(resolve, 2000)); // așteaptă 2 secunde
+        await new Promise((resolve) => setTimeout(resolve, 2000));
         return uploadRecording(uri, sessionId, attempt + 1, maxAttempts);
       } else {
         console.error('❌ Final upload attempt failed. No more retries.');
@@ -283,10 +285,10 @@ export default function RecordScreen() {
         const uri = recording.getURI();
 
         if (uri) {
-          const newName = `${Date.now()}.m4a`;
+          const newName = `${getTimestamp()}.m4a`;
           const newPath = `${FileSystem.documentDirectory}${newName}`;
           await FileSystem.moveAsync({ from: uri, to: newPath });
-          await uploadRecording(newPath, sessionId); // cu retry inclus
+          await uploadRecording(newPath, sessionId);
         }
 
         setRecording(null);
@@ -336,58 +338,78 @@ export default function RecordScreen() {
   return (
     <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end', paddingBottom: 20 }} style={{ flex: 1 }}>
       <View style={styles.container}>
-          {suggestedQuestions.length > 0 && (
-            <View style={{ marginTop: 30, alignItems: 'center' }}>
-              <Text style={styles.suggestionsHeader}>📌 Suggested Questions</Text>
-              {suggestedQuestions.map((question, index) => (
-                <Animated.View key={index} style={[styles.questionCard, { opacity: fadeInQuestions[index] }]}>
-                  <Text style={styles.questionText}>{question}</Text>
-                </Animated.View>
-              ))}
-            </View>
+        {suggestedQuestions.length > 0 && (
+          <View style={{ marginTop: 30, alignItems: 'center' }}>
+            <Text style={styles.suggestionsHeader}>📌 Suggested Questions</Text>
+            {suggestedQuestions.map((question, index) => (
+              <Animated.View key={index} style={[styles.questionCard, { opacity: fadeInQuestions[index] }]}>
+                <Text style={styles.questionText}>{question}</Text>
+              </Animated.View>
+            ))}
+          </View>
+        )}
+        {loadingSuggestions && (
+          <Text style={{ marginTop: 10, fontSize: 14, color: '#555' }}>⏳ Loading questions...</Text>
+        )}
+        {recordingStarted && (
+          <View style={styles.waveformRow}>
+            {waveformValues.map((bar, index) => (
+              <Animated.View
+                key={index}
+                style={[
+                  styles.waveformBar,
+                  {
+                    height: Animated.multiply(bar, 1).interpolate({
+                      inputRange: [0, 30],
+                      outputRange: [0, 30],
+                      extrapolate: 'clamp'
+                    })
+                  },
+                  !isRecordingRef.current && styles.waveformBarInactive
+                ]}
+              />
+            ))}
+          </View>
+        )}
+        <Animated.View style={[styles.outerCircle, { transform: [{ scale: pulseAnim }] }]}>
+          {!isRecordingRef.current ? (
+            <TouchableOpacity onPress={startRecording} style={styles.innerCircle} />
+          ) : (
+            <TouchableOpacity onPress={stopRecording} style={styles.stopSquare} />
           )}
-          {loadingSuggestions && (
-            <Text style={{ marginTop: 10, fontSize: 14, color: '#555' }}>⏳ Loading questions...</Text>
-          )}
-          {recordingStarted && (
-            <View style={styles.waveformRow}>
-              {waveformValues.map((bar, index) => (
-                <Animated.View
-                  key={index}
-                  style={[
-                    styles.waveformBar,
-                    {
-                      height: Animated.multiply(bar, 1).interpolate({
-                        inputRange: [0, 30],
-                        outputRange: [0, 30],
-                        extrapolate: 'clamp'
-                      })
-                    },
-                    !isRecordingRef.current && styles.waveformBarInactive
-                  ]}
-                />
-              ))}
-            </View>
-          )}
-          <Animated.View style={[styles.outerCircle, { transform: [{ scale: pulseAnim }] }]}>
-            {!isRecordingRef.current ? (
-              <TouchableOpacity onPress={startRecording} style={styles.innerCircle} />
-            ) : (
-              <TouchableOpacity onPress={stopRecording} style={styles.stopSquare} />
-            )}
-          </Animated.View>
-          <Text style={styles.label}>
-            {isRecordingRef.current ? 'Stop Recording' : 'Start Recording'}
-          </Text>
+        </Animated.View>
+        <Text style={styles.label}>
+          {isRecordingRef.current ? 'Stop Recording' : 'Start Recording'}
+        </Text>
+        <View style={styles.buttonRow}>
           <TouchableOpacity onPress={() => fetchSuggestions(sessionId)} style={styles.suggestionButton}>
-            <Text style={{ color: 'white', fontSize: 16 }}>💡 Get Questions</Text>
+            <Text style={{ color: '#333', fontSize: 16 }}>💡 Get Questions</Text>
           </TouchableOpacity>
+          <TouchableOpacity onPress={() => {
+            setData({
+              session_id: sessionId,
+              cv: cvText,
+              job_description: jobDescriptionText,
+            });
+          router.push('/finish');
+          }}
+          style={styles.suggestionButton}>
+          <Text style={{ color: '#333', fontSize: 16 }}>✅ Finish Interview</Text>
+        </TouchableOpacity>
       </View>
+    </View>
     </ScrollView >
   );
 }
 
 const styles = StyleSheet.create({
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 20,
+  },
   fixedBottom: {
     position: 'absolute',
     bottom: 40,
@@ -427,10 +449,15 @@ const styles = StyleSheet.create({
   },
   suggestionButton: {
     marginTop: 20,
-    backgroundColor: '#007BFF',
     paddingVertical: 15,
     paddingHorizontal: 30,
-    borderRadius: 20,
+    borderRadius: 10,
+    shadowOffset: { width: 0, height: 2 },
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 3,
   },
   suggestionsHeader: {
     fontWeight: 'bold',
